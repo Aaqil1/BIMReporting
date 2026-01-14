@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: reports-ms
+  datasource:
+    url: jdbc:mysql://localhost:3306/reports?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: reports_user
+    password: reports_pass
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: bim-report-workers
+      auto-offset-reset: earliest
+    listener:
+      ack-mode: record
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+archive:
+  db:
+    base-url: http://localhost:8081
+    timeout-ms: 5000
+logging:
+  level:
+    root: INFO
+    com.edwardjones.reportsms: INFO
+

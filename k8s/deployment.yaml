@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reports-ms
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: reports-ms
+  template:
+    metadata:
+      labels:
+        app: reports-ms
+    spec:
+      containers:
+        - name: reports-ms
+          image: reports-ms:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: local
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://mysql:3306/reports?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+            - name: SPRING_DATASOURCE_USERNAME
+              value: reports_user
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: reports_pass
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: ARCHIVE_DB_BASE_URL
+              value: http://archive-db:8080
+
