@@ -10,6 +10,20 @@
 - Async Kafka (reports-ms producer → reports-ms consumer) for heavy work.
 - Sync HTTP (reports-ms → Archive) with CircuitBreaker/Retry.
 
+## Message + HTTP payloads
+- Kafka event: `requestId`, `reportType`, `requestedBy`, `parametersJson`, `requestedAt` (JSON).
+- Archive HTTP call:
+  ```http
+  POST /api/v1/archive/reports
+  Content-Type: application/json
+  {
+    "requestId": "7f6f13d7-...",
+    "payload": "{\"reportType\":\"PERFORMANCE\",...}"
+  }
+  ```
+  - Success: `{ "archiveRef": "archive://bucket/key.pdf" }`
+  - Failure: CircuitBreaker opens → `ArchiveUnavailableException` → DB status=FAILED + Kafka DLQ.
+
 ## Lifecycle (step-by-step)
 1) Client submits via REST; service persists request and emits Kafka event.
 2) Consumer processes event, runs strategy, calls Archive, updates DB.

@@ -5,6 +5,22 @@
 - Service: ClusterIP on port 80 → 8080.
 - Helm chart: values for image, replicaCount, env overrides.
 
+## Practical deploy commands
+- Raw manifests:
+  ```bash
+  kubectl apply -f k8s/deployment.yaml
+  kubectl apply -f k8s/service.yaml
+  ```
+- Helm with overrides:
+  ```bash
+  helm upgrade --install reports-ms ./helm \
+    --set image.repository=reports-ms \
+    --set image.tag=1.0.0 \
+    --set replicaCount=2 \
+    --set env.SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+    --set env.SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/reports?useSSL=false
+  ```
+
 ## How it runs (step-by-step)
 1) Deploy via Helm: set image repo/tag and env (datasource, Kafka bootstrap, archive URL, profile).
 2) Deployment rolls out pods; each pod runs consumer concurrency=1 (so partitions are spread across pods).

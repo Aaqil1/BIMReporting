@@ -7,6 +7,36 @@
 - Correlation/structured logging: `MdcCorrelationFilter` seeds `correlationId` (also reused in Kafka consumer).
 - Layered architecture: Controller → Service → Repository → Kafka/DB; DTOs isolate transport from domain.
 
+## Code anchors (copy/paste ready)
+- Strategy selection:
+  ```java
+  return switch (reportType) {
+      case PERFORMANCE -> performanceReportStrategy;
+      case BENCHMARK_SUMMARY -> benchmarkSummaryReportStrategy;
+      case DIVERSIFICATION_BAR -> diversificationBarReportStrategy;
+      case ASSET_ALLOCATION -> assetAllocationReportStrategy;
+  };
+  ```
+- Idempotent consumer guard:
+  ```java
+  if (request.getStatus() == ReportStatus.COMPLETED) return;
+  if (request.getStatus() == ReportStatus.IN_PROGRESS) return;
+  request.setStatus(ReportStatus.IN_PROGRESS);
+  ```
+- Resilience on external call:
+  ```java
+  @CircuitBreaker(name = "archiveDb", fallbackMethod = "fallbackArchive")
+  @Retry(name = "archiveDb")
+  public String archiveReport(String requestId, String payloadJson) { ... }
+  ```
+- CorrelationId propagation:
+  ```java
+  // REST filter seeds MDC
+  MDC.put("correlationId", hdrOrRandom);
+  // Kafka listener re-hydrates
+  MDC.put("correlationId", event.getRequestId());
+  ```
+
 ## How to explain in interviews (step-by-step)
 1) Start with the Strategy pattern: “Each report type has its own strategy implementing `ReportGenerationStrategy`, selected by `ReportStrategyFactory` so adding a new type doesn’t change orchestration.”
 2) Mention why: “Keeps the Kafka consumer small, respects Open/Closed, and localizes metrics per report type.”

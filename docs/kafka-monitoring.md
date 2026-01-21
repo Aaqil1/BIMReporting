@@ -10,6 +10,25 @@
 4) Use structured logging with `correlationId` to trace messages end-to-end; include partition/offset in logs for DLQ triage.
 5) For reprocessing: document a DLQ replay script (consume, fix payload, republish to main topic with same key).
 
+### AKHQ quickstart (docker-compose snippet)
+```yaml
+akhq:
+  image: tchiotludo/akhq:0.24.0
+  environment:
+    AKHQ_CONFIGURATION: |
+      akhq:
+        connections:
+          local:
+            properties:
+              bootstrap.servers: "kafka:9092"
+  ports:
+    - "8085:8080"
+```
+
+### Micrometer / Prometheus hints
+- Ensure `management.endpoints.web.exposure.include=prometheus`.
+- Scrape `/actuator/prometheus`; chart lag via `kafka_consumer_records_lag_max` and `kafka_consumer_records_consumed_total`.
+
 ## Interview talking points
 - “We monitor lag per partition, DLQ rates, and consumer errors; AKHQ/Kowl for inspection, Prometheus/Grafana for SLOs.”
 - “Reprocessing is controlled: pull from DLQ, validate, and re-publish to the primary topic to maintain ordering.”

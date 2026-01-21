@@ -9,6 +9,52 @@
 - Integration: `ArchiveDbClient` (WebClient + Resilience4j) for archive handoff.
 - Config/observability: Security (JWT scopes), MDC filter, Micrometer timers, Logback JSON, Actuator.
 
+## API contracts (practical)
+- POST `/api/v1/reports/generate` (scope `reports.write`)
+  - Request:
+    ```json
+    {
+      "reportType": "PERFORMANCE",
+      "requestedBy": "analyst@ej.com",
+      "parameters": { "accountIds": ["A1","A2"], "from": "2024-01-01", "to": "2024-12-31" }
+    }
+    ```
+  - Response 202:
+    ```json
+    { "requestId": "7f6f13d7-..." }
+    ```
+- GET `/api/v1/reports/{requestId}/status` (scope `reports.read`)
+  - Response 200:
+    ```json
+    { "requestId": "7f6f13d7-...", "status": "IN_PROGRESS", "errorMessage": null }
+    ```
+- GET `/api/v1/reports/{requestId}` (scope `reports.read`)
+  - Response 200:
+    ```json
+    {
+      "requestId": "7f6f13d7-...",
+      "reportType": "PERFORMANCE",
+      "status": "COMPLETED",
+      "requestedBy": "analyst@ej.com",
+      "parametersJson": "{\"accountIds\":[\"A1\",\"A2\"],\"from\":\"2024-01-01\",\"to\":\"2024-12-31\"}",
+      "archiveRef": "archive://bucket/key.pdf",
+      "errorMessage": null,
+      "createdAt": "2024-01-01T12:00:01Z",
+      "updatedAt": "2024-01-01T12:00:20Z"
+    }
+    ```
+
+## Example curl flow
+```bash
+TOKEN=... # JWT with scopes reports.write/reports.read
+REQ=$(curl -s -X POST https://localhost:8080/api/v1/reports/generate \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"reportType":"PERFORMANCE","requestedBy":"analyst@ej.com","parameters":{"accountIds":["A1"],"from":"2024-01-01","to":"2024-12-31"}}')
+REQ_ID=$(echo $REQ | jq -r .requestId)
+curl -s -H "Authorization: Bearer $TOKEN" https://localhost:8080/api/v1/reports/$REQ_ID/status
+curl -s -H "Authorization: Bearer $TOKEN" https://localhost:8080/api/v1/reports/$REQ_ID
+```
+
 ## Flow (step-by-step)
 1) Client calls POST `/api/v1/reports/generate` with report type + params (JWT scope `reports.write`).
 2) `ReportService` generates `requestId`, stores `ReportRequest` as SUBMITTED, publishes `ReportRequestedEvent` keyed by `requestId`.
