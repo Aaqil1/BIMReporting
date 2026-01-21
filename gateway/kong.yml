@@ -1,0 +1,44 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: reports-ms
+    url: http://reports-ms:8080
+    routes:
+      - name: reports-generate
+        paths:
+          - /api/v1/reports/generate
+        methods: [POST]
+      - name: reports-status
+        paths:
+          - ~ ^/api/v1/reports/[^/]+/status$
+        methods: [GET]
+      - name: reports-details
+        paths:
+          - ~ ^/api/v1/reports/[^/]+$
+        methods: [GET]
+    plugins:
+      - name: jwt
+        config:
+          key_claim_name: kid
+          claims_to_verify:
+            - exp
+            - nbf
+          secret_is_base64: false
+      - name: rate-limiting
+        config:
+          minute: 300
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-Id
+          echo_downstream: true
+
+consumers:
+  - username: reports-client
+    custom_id: reports-client
+
+jwt_secrets:
+  - consumer: reports-client
+    algorithm: HS256
+    key: reports-client
+    secret: please-change-this-secret

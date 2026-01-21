@@ -7,7 +7,7 @@
 
 ## Recommended setup
 - Gateway: Kong / NGINX / AWS API Gateway / Istio ingress.
-- TLS termination at gateway; mTLS from gateway → services (optional but recommended).
+- TLS termination at gateway; mTLS from gateway to services (optional but recommended).
 - JWT validation at gateway (issuer/audience, exp/nbf, signature, key rotation via JWKS).
 - Scope-based routing/authorization: enforce `reports.write` for POST, `reports.read` for GETs.
 - Rate limiting & burst control per client/app; optional quota plans.
@@ -19,9 +19,9 @@
 1) Client obtains access token (OAuth2 / OIDC).
 2) Client calls gateway with `Authorization: Bearer <JWT>`.
 3) Gateway validates token (sig + claims) and enforces scopes per route:
-   - POST `/api/v1/reports/generate` → requires `reports.write`
-   - GET `/api/v1/reports/{id}/status` → requires `reports.read`
-   - GET `/api/v1/reports/{id}` → requires `reports.read`
+   - POST `/api/v1/reports/generate` -> requires `reports.write`
+   - GET `/api/v1/reports/{id}/status` -> requires `reports.read`
+   - GET `/api/v1/reports/{id}` -> requires `reports.read`
 4) Gateway injects vetted identity headers to upstream (`X-Principal`, `X-Scopes`) and strips user-supplied variants.
 5) Service still runs resource-server validation (defense in depth).
 
@@ -31,7 +31,7 @@
 - Logging: structured JSON with route, client-id, correlationId, status, latency, error cause.
 - Dashboards: p99 latency per route, auth failures, 4xx/5xx rates, rate-limit rejects.
 
-## Example Kong declarative snippet (illustrative)
+## Example Kong declarative snippet
 ```yaml
 services:
   - name: reports-ms
@@ -40,26 +40,40 @@ services:
       - name: reports-generate
         paths: ["/api/v1/reports/generate"]
         methods: ["POST"]
-plugins:
-  - name: jwt
-    config:
-      key_claim_name: kid
-      claims_to_verify: ["exp","nbf"]
-      secret_is_base64: false
-  - name: acl
-    config:
-      whitelist: ["reports.write"]
-  - name: rate-limiting
-    config:
-      minute: 300
-  - name: correlation-id
-    config:
-      header_name: "X-Correlation-Id"
-      echo_downstream: true
+      - name: reports-status
+        paths: ["~ ^/api/v1/reports/[^/]+/status$"]
+        methods: ["GET"]
+      - name: reports-details
+        paths: ["~ ^/api/v1/reports/[^/]+$"]
+        methods: ["GET"]
+    plugins:
+      - name: jwt
+        config:
+          key_claim_name: kid
+          claims_to_verify: ["exp","nbf"]
+          secret_is_base64: false
+      - name: rate-limiting
+        config:
+          minute: 300
+      - name: correlation-id
+        config:
+          header_name: "X-Correlation-Id"
+          echo_downstream: true
+consumers:
+  - username: reports-client
+jwt_secrets:
+  - consumer: reports-client
+    algorithm: HS256
+    key: reports-client
+    secret: please-change-this-secret
 ```
 
+## Project files
+- `gateway/kong.yml` declarative config (mounted into Kong by compose)
+- `docker/docker-compose.yml` can run Kong + app locally
+
 ## Practical interview talking points
-- “Gateway validates JWT and scopes before traffic hits the service; the service still enforces JWT (layered defense).”
-- “Rate limits and WAF live at the edge; retries are off for non-idempotent POST.”
-- “We propagate correlationId/traceparent from the gateway so API → Kafka → Archive is traceable end-to-end.”
-- “mTLS from gateway to services for service authentication; JWKS rotation handles key rollover.”
+- Gateway validates JWT and scopes before traffic hits the service; the service still enforces JWT (layered defense).
+- Rate limits and WAF live at the edge; retries are off for non-idempotent POST.
+- CorrelationId/traceparent propagate API -> Kafka -> Archive for traceability.
+- mTLS from gateway to services for service authentication; JWKS rotation handles key rollover.

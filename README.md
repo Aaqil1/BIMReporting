@@ -39,8 +39,20 @@ cd ..
 SPRING_PROFILES_ACTIVE=local mvn spring-boot:run
 ```
 
+## Run with Docker Compose + Kong API Gateway (optional)
+```bash
+# build the app image
+mvn clean package
+docker build -t reports-ms:1.0.0 -f docker/Dockerfile .
+cd docker
+docker-compose up -d
+```
+- Gateway proxy: http://localhost:8000
+- Admin (lock down in real envs): http://localhost:8001
+- Upstream app: http://localhost:8080
+
 ## REST APIs
-- POST `/api/v1/reports/generate` → 202 {requestId}
+- POST `/api/v1/reports/generate` -> 202 {requestId}
 - GET `/api/v1/reports/{requestId}/status`
 - GET `/api/v1/reports/{requestId}`
 Requires JWT:
@@ -90,6 +102,10 @@ kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
 ```
 
+## API Gateway (Kong declarative)
+- Declarative config: `gateway/kong.yml`
+- Compose mounts it for local gateway usage.
+
 ## Helm
 ```bash
 cd helm
@@ -107,4 +123,3 @@ git commit -m "Add reports-ms service with README"
 git branch -M main
 git push -u origin main
 ```
-
