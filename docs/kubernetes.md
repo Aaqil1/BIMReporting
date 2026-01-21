@@ -1,11 +1,11 @@
-# Kubernetes & Helm (Interview Notes)
+# Kubernetes & Helm (Deep Dive)
 
-## What’s defined
+## Baseline (what’s in the repo)
 - Deployment: replicas=2, image `reports-ms:1.0.0`, env for DB/Kafka/archive, profile `local`.
-- Service: ClusterIP on port 80 → 8080.
+- Service: ClusterIP on port 80 -> 8080.
 - Helm chart: values for image, replicaCount, env overrides.
 
-## Practical deploy commands
+## Deploy commands
 - Raw manifests:
   ```bash
   kubectl apply -f k8s/deployment.yaml
@@ -21,28 +21,177 @@
     --set env.SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/reports?useSSL=false
   ```
 
-## How it runs (step-by-step)
-1) Deploy via Helm: set image repo/tag and env (datasource, Kafka bootstrap, archive URL, profile).
-2) Deployment rolls out pods; each pod runs consumer concurrency=1 (so partitions are spread across pods).
-3) Service exposes HTTP to the cluster; Kafka/MySQL/Archive endpoints injected via env.
-4) Actuator probes can be wired to readiness/liveness for rollout safety.
+## Probes & lifecycle (high-confidence rollouts)
+Example (augment Deployment):
+```yaml
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","sleep 10"] # allow Kafka consumer to drain before SIGTERM
+```
 
-## Scaling & pod-to-partition mapping
-- Consumer group `bim-report-workers` uses Kafka rebalancing; with 6 partitions and concurrency=1, scale to 6 pods for full parallelism.
-- For more throughput, increase partitions first, then scale pods to match.
+## Resources & JVM sizing
+```yaml
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        env:
+          - name: JAVA_TOOL_OPTIONS
+            value: "-XX:InitialRAMPercentage=50 -XX:MaxRAMPercentage=75"
+```
 
-## Resiliency practices to mention
-- RollingUpdate by default; add PodDisruptionBudget to avoid total drain during maintenance.
-- Use readinessProbe on `/actuator/health/readiness` and livenessProbe on `/actuator/health/liveness`.
-- Requests/limits to avoid CPU throttling; pin JVM heap via `JAVA_TOOL_OPTIONS` if needed.
-- CircuitBreaker/Retry already protect Archive; add timeouts on DB/Kafka via env.
+## Scaling & Kafka alignment
+- Consumer group: `bim-report-workers`, concurrency=1 -> each pod owns whole partitions.
+- With 6 partitions, set replicas=6 for max parallelism; rebalancing redistributes partitions on scale/rollout.
+- If you increase partitions, scale pods accordingly; keep key-based routing (requestId) to preserve ordering.
+
+## HPA examples
+- CPU-based:
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reports-ms
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reports-ms
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+- Lag-based (custom metric placeholder): scrape `kafka_consumer_records_lag_max` to Prometheus Adapter and target it:
+```yaml
+    - type: Pods
+      pods:
+        metric:
+          name: kafka_consumer_records_lag_max
+        target:
+          type: AverageValue
+          averageValue: "100"
+```
+
+## Pod disruption & placement
+- PodDisruptionBudget:
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reports-ms-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: reports-ms
+```
+- Anti-affinity / spread:
+```yaml
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: ["reports-ms"]
+              topologyKey: "kubernetes.io/hostname"
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: "topology.kubernetes.io/zone"
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: reports-ms
+```
 
 ## Config & secrets
-- Externalize creds via K8s Secrets (DB user/pass, JWT keys) and ConfigMaps for non-secrets (bootstrap servers, archive URL).
-- Use Helm values to swap between envs; keep defaults minimal and override per environment.
+- ConfigMap for non-secrets:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reports-ms-config
+data:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  ARCHIVE_DB_BASE_URL: http://archive-db:8080
+```
+- Secret for credentials (example; use External Secrets/Sealed Secrets in real envs):
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: reports-ms-secrets
+type: Opaque
+stringData:
+  SPRING_DATASOURCE_USERNAME: reports_user
+  SPRING_DATASOURCE_PASSWORD: reports_pass
+```
+- Mount/inject:
+```yaml
+        envFrom:
+          - configMapRef:
+              name: reports-ms-config
+          - secretRef:
+              name: reports-ms-secrets
+```
 
-## Interview refinements to propose
-- Add HPA on CPU + Kafka lag (via custom metrics) to auto-scale workers.
-- Add ServiceMonitor for Prometheus scraping; expose Micrometer Prometheus endpoint.
-- Integrate PodAntiAffinity or topology spread to avoid single-node blast radius.
-- Add InitContainers to wait for Kafka/MySQL readiness in lower envs.
+## Networking & ingress
+- Current chart exposes ClusterIP; pair with ingress/controller or API gateway (Kong) for TLS, auth, and rate limits.
+- ServiceAccount + RBAC if pods need Kubernetes API access (not required here).
+
+## Observability on K8s
+- Expose `/actuator/prometheus`; add `ServiceMonitor` for Prometheus Operator.
+- Log shipping: stdout -> sidecar/DaemonSet (Fluent Bit/Vector) to ELK/Cloud logging.
+- Tracing: enable OpenTelemetry agent; propagate `traceparent` from gateway.
+
+## Rollouts and safety
+- RollingUpdate is default; for safer deploys consider canary/blue-green via Argo Rollouts or Helm hooks.
+- Set `maxUnavailable=0`, `maxSurge=1` if you need zero-downtime plus capacity headroom.
+- Set `terminationGracePeriodSeconds` >= Kafka processing window; use preStop sleep to finish in-flight.
+
+## Init/wait strategies
+- InitContainer to wait for Kafka/MySQL DNS/connectivity in lower envs (do not block indefinitely in prod).
+- Use `startupProbe` if JVM needs warm-up (e.g., large heaps).
+
+## Security hardening
+- Run as non-root, read-only root FS, drop capabilities:
+```yaml
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+```
+- TLS to Kafka/MySQL via mounted certs if required; configure truststores via env/volume.
+
+## What to mention in interviews
+- Mapping: replicas <-> Kafka partitions; readiness/liveness; preStop drain for Kafka.
+- Resilience: PDB, anti-affinity, HPA on lag, timeouts around downstreams.
+- Config/secrets separation and rotation; observability via Prometheus + logs + traces.
+- Rollout safety and zero-downtime strategies; resource tuning tied to JVM heap sizing.
