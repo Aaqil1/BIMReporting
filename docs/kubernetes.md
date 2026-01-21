@@ -1,11 +1,19 @@
-# Kubernetes & Helm (Deep Dive)
+# Kubernetes & Helm (Deep Dive + Trainer Guide)
 
-## Baseline (what’s in the repo)
+## Core basics (quick refresher)
+- Control plane: API Server (front door), etcd (state), Scheduler (places pods), Controller Manager (reconcilers), Admission (mutating/validating webhooks).
+- Workloads: Pod, Deployment (stateless rolling), StatefulSet (stable IDs), DaemonSet (one-per-node), Job/CronJob (batch).
+- Services: ClusterIP, NodePort, LoadBalancer, Headless (service discovery).
+- Config: ConfigMap (non-secret), Secret (confidential), Downward API, CSI volumes/PV/PVC, emptyDir for ephemeral data.
+- Scheduling: labels/selectors, taints/tolerations, affinity/anti-affinity, topology spread, priority classes.
+- Security: RBAC, ServiceAccounts, PodSecurity (Baseline/Restricted), NetworkPolicy, securityContext (runAsNonRoot, drop caps), mTLS to backends where required.
+
+## Baseline (repo)
 - Deployment: replicas=2, image `reports-ms:1.0.0`, env for DB/Kafka/archive, profile `local`.
 - Service: ClusterIP on port 80 -> 8080.
 - Helm chart: values for image, replicaCount, env overrides.
 
-## Deploy commands
+## Deploy commands (hands-on)
 - Raw manifests:
   ```bash
   kubectl apply -f k8s/deployment.yaml
@@ -22,7 +30,6 @@
   ```
 
 ## Probes & lifecycle (high-confidence rollouts)
-Example (augment Deployment):
 ```yaml
         readinessProbe:
           httpGet:
@@ -43,6 +50,7 @@ Example (augment Deployment):
             exec:
               command: ["/bin/sh","-c","sleep 10"] # allow Kafka consumer to drain before SIGTERM
 ```
+- Ensure `terminationGracePeriodSeconds` > preStop sleep + max in-flight work time.
 
 ## Resources & JVM sizing
 ```yaml
@@ -159,10 +167,33 @@ stringData:
           - secretRef:
               name: reports-ms-secrets
 ```
+- Use `valueFrom.secretKeyRef` for single keys when you need tighter scope.
 
 ## Networking & ingress
 - Current chart exposes ClusterIP; pair with ingress/controller or API gateway (Kong) for TLS, auth, and rate limits.
 - ServiceAccount + RBAC if pods need Kubernetes API access (not required here).
+- NetworkPolicy example (allow only gateway + DNS):
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: reports-allow-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: reports-ms
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 8080
+  policyTypes: ["Ingress"]
+```
 
 ## Observability on K8s
 - Expose `/actuator/prometheus`; add `ServiceMonitor` for Prometheus Operator.
@@ -173,6 +204,7 @@ stringData:
 - RollingUpdate is default; for safer deploys consider canary/blue-green via Argo Rollouts or Helm hooks.
 - Set `maxUnavailable=0`, `maxSurge=1` if you need zero-downtime plus capacity headroom.
 - Set `terminationGracePeriodSeconds` >= Kafka processing window; use preStop sleep to finish in-flight.
+- Use `revisionHistoryLimit` to control stored ReplicaSets; `progressDeadlineSeconds` to detect stalled rollouts.
 
 ## Init/wait strategies
 - InitContainer to wait for Kafka/MySQL DNS/connectivity in lower envs (do not block indefinitely in prod).
@@ -189,6 +221,16 @@ stringData:
             drop: ["ALL"]
 ```
 - TLS to Kafka/MySQL via mounted certs if required; configure truststores via env/volume.
+- Namespace isolation and PodSecurity admission (Baseline/Restricted) for multi-tenant clusters.
+
+## Debugging and ops (trainer tips)
+- Inspect rollout: `kubectl rollout status deploy/reports-ms`; undo: `kubectl rollout undo deploy/reports-ms`.
+- Scheduling issues: `kubectl describe pod <pod>` (events), check taints/tolerations.
+- Port-forward: `kubectl port-forward deploy/reports-ms 8080:8080` for quick API checks.
+- Exec: `kubectl exec -it deploy/reports-ms -- sh` (if shell exists).
+- Logs: `kubectl logs deploy/reports-ms --since=10m`; add `-p` for previous container.
+- Topline: `kubectl get pods -o wide`, `kubectl top pods` (requires metrics-server).
+- Stuck rollout: check readinessProbe failures, image pulls, failing initContainers.
 
 ## What to mention in interviews
 - Mapping: replicas <-> Kafka partitions; readiness/liveness; preStop drain for Kafka.
